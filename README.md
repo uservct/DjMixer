@@ -1,44 +1,67 @@
 # 🎧 DJ Mixer - Python
 
-Ứng dụng DJ Mixer desktop được viết bằng Python, phục vụ môn học **Lập trình Âm thanh**.
+Ứng dụng DJ Mixer desktop viết bằng Python cho môn **Lập trình Âm thanh**.
 
-## Tính năng
-- Load và phát 2 track nhạc đồng thời (Deck A & Deck B)
-- Crossfader để blend âm thanh giữa 2 deck
-- Điều chỉnh BPM / tempo và pitch từng deck
-- Hiệu ứng âm thanh: EQ (Bass/Mid/Treble), Reverb, Echo, Low-pass / High-pass filter
-- Waveform visualization theo thời gian thực
-- Ghi âm output ra file WAV
+## Tính năng chính
 
-## Tech Stack
+- Phát 2 deck độc lập: **Deck A** và **Deck B**
+- Load file audio: `.wav`, `.flac`, `.ogg`, `.mp3`, `.aiff`, `.aif`
+- Điều khiển transport: Play/Pause, Stop, Seek
+- Mixer trung tâm:
+    - Crossfader (Linear / Equal Power)
+    - Master Volume
+- Hiệu ứng real-time theo từng deck:
+    - EQ 3 dải (Bass / Mid / Treble)
+    - Low-pass / High-pass
+    - Echo (delay + feedback)
+    - Reverb
+- Tempo & Pitch control trên từng deck
+- BPM detection (chạy nền, không block UI)
+- Waveform visualization + playhead theo thời gian thực
+- Ghi âm master output ra file WAV trong thư mục `recordings/`
+
+## Kiến trúc hiện tại
+
+- `core/audio_engine.py`: playback bằng `sounddevice.OutputStream` + callback theo chunk
+- `core/effects.py`: effects chain stateful cho xử lý liên tục giữa các chunk
+- `core/mixer.py`: tính volume Deck A/B từ crossfader + master
+- `core/bpm_detector.py`: BPM detect + xử lý tempo/pitch
+- `gui/*`: giao diện PyQt6 (deck, mixer, effects, waveform, main window)
+- `utils/audio_recorder.py`: thu và ghi master mix WAV
+- `utils/file_handler.py`: validate file + metadata helpers
+
+## Công nghệ sử dụng
+
 - **GUI**: PyQt6
-- **Audio Playback**: pygame, pyaudio, soundfile
-- **Audio Processing**: librosa, scipy, numpy
+- **Playback/IO**: sounddevice, soundfile
+- **DSP/Analysis**: numpy, scipy, librosa
 - **Waveform**: pyqtgraph
-- **Testing**: pytest
+- **Test**: pytest
 
-## Cài đặt
+## Cài đặt dependencies
+
+### Cách 1 (khuyên dùng Windows) – 1 click
+
+Chạy file [install_dependencies.bat](install_dependencies.bat):
+
+- Lần đầu: tự tạo `venv`, cài pip từ `requirements.txt`, rồi chạy app.
+- Các lần sau: chạy app luôn (bỏ qua cài đặt).
+
+### Cách 2 – thủ công
 
 ```bash
-# Tạo virtual environment
 python -m venv venv
-venv\Scripts\activate        # Windows
-source venv/bin/activate     # Linux/Mac
-
-# Cài dependencies
+venv\Scripts\activate
 pip install -r requirements.txt
 ```
-
-> **Lưu ý Windows**: Nếu `pyaudio` báo lỗi, dùng:
-> ```bash
-> pip install pipwin && pipwin install pyaudio
-> ```
 
 ## Chạy ứng dụng
 
 ```bash
 python main.py
 ```
+
+hoặc double-click [Run_DjMixer.bat](Run_DjMixer.bat).
 
 ## Chạy tests
 
@@ -49,31 +72,39 @@ pytest tests/ -v
 ## Cấu trúc thư mục
 
 ```
-dj_mixer/
+DjMixer/
 ├── main.py
 ├── requirements.txt
+├── Run_DjMixer.bat
 ├── core/
-│   ├── audio_engine.py     # Load, play, pause, seek
-│   ├── mixer.py            # Crossfader, volume mixing
-│   ├── effects.py          # EQ, reverb, echo, filter
-│   └── bpm_detector.py     # BPM detection & tempo control
+│   ├── audio_engine.py
+│   ├── mixer.py
+│   ├── effects.py
+│   └── bpm_detector.py
 ├── gui/
-│   ├── main_window.py      # Cửa sổ chính
-│   ├── deck_widget.py      # UI Deck A/B
-│   ├── mixer_panel.py      # Crossfader panel
-│   ├── effects_panel.py    # Effects controls
-│   └── waveform_widget.py  # Waveform display
+│   ├── main_window.py
+│   ├── deck_widget.py
+│   ├── mixer_panel.py
+│   ├── effects_panel.py
+│   └── waveform_widget.py
 ├── utils/
-│   ├── audio_recorder.py   # Ghi âm output
-│   └── file_handler.py     # Load file nhạc
+│   ├── audio_recorder.py
+│   └── file_handler.py
+├── recordings/
 └── tests/
-    ├── test_audio_engine.py
-    ├── test_mixer.py
-    ├── test_effects.py
-    └── test_bpm_detector.py
+        ├── test_audio_engine.py
+        ├── test_mixer.py
+        ├── test_effects.py
+        └── test_bpm_detector.py
 ```
 
+## Ghi chú
+
+- Với file MP3, môi trường thiếu backend decode có thể gây lỗi đọc file; nên ưu tiên WAV/FLAC/OGG để ổn định.
+- `run_djmixer.bat` hiện là wrapper gọi lại launcher chính.
+
 ## Nhóm thực hiện
+
 - Thành viên 1: Audio Engine & File Handler
 - Thành viên 2: Mixer Logic & Crossfader
 - Thành viên 3: Audio Effects (EQ, Reverb, Echo, Filter)
