@@ -10,6 +10,7 @@ Cung cấp:
 """
 
 import numpy as np
+from math import gcd
 
 try:
     import librosa
@@ -23,6 +24,12 @@ try:
     SF_AVAILABLE = True
 except ImportError:
     SF_AVAILABLE = False
+
+try:
+    from scipy.signal import resample_poly
+    SCIPY_AVAILABLE = True
+except ImportError:
+    SCIPY_AVAILABLE = False
 
 
 class BPMDetector:
@@ -42,6 +49,54 @@ class BPMDetector:
         self.bpm: float = 0.0
         self.tempo_ratio: float = 1.0
         self.pitch_steps: float = 0.0
+        self.max_detect_seconds: int = 90
+
+    def _to_mono_float32(self, audio_data: np.ndarray) -> np.ndarray:
+        """Chuẩn hóa audio về mono float32, xử lý cả (n, ch) và (ch, n)."""
+        arr = np.asarray(audio_data)
+        if arr.size == 0:
+            return np.array([], dtype=np.float32)
+
+        if arr.ndim == 1:
+            mono = arr
+        elif arr.ndim == 2:
+            # Thường có dạng (samples, channels). Nếu ngược lại vẫn xử lý được.
+            mono = arr.mean(axis=1) if arr.shape[0] >= arr.shape[1] else arr.mean(axis=0)
+        else:
+            mono = arr.reshape(-1)
+
+        return mono.astype(np.float32, copy=False)
+
+    def _resample_safe(
+        self,
+        mono: np.ndarray,
+        orig_sr: int,
+        target_sr: int,
+    ) -> np.ndarray:
+        """Resample có fallback, tránh lỗi thiếu dependency như resampy/soxr."""
+        if orig_sr == target_sr:
+            return mono
+
+        # Cố gắng dùng librosa trước
+        try:
+            return librosa.resample(
+                mono,
+                orig_sr=orig_sr,
+                target_sr=target_sr,
+                res_type="kaiser_fast",
+            ).astype(np.float32, copy=False)
+        except Exception:
+            pass
+
+        # Fallback bằng scipy nếu có
+        if SCIPY_AVAILABLE:
+            g = gcd(orig_sr, target_sr)
+            up = target_sr // g
+            down = orig_sr // g
+            return resample_poly(mono, up, down).astype(np.float32, copy=False)
+
+        # Không thể resample thì trả về gốc để không crash
+        return mono
 
     # ── BPM Detection ─────────────────────────────────────────────────────────
 
@@ -53,23 +108,50 @@ class BPMDetector:
         if not LIBROSA_AVAILABLE:
             return 0.0
         try:
-            # librosa beat_track cần mono float32
-            mono = audio_data if audio_data.ndim == 1 else audio_data.mean(axis=1)
-            mono = mono.astype(np.float32)
-            tempo, _ = librosa.beat.beat_track(y=mono, sr=self.sample_rate)
-            self.bpm = float(tempo) if np.isscalar(tempo) else float(tempo[0])
+            mono = self._to_mono_float32(audio_data)
+            if mono.size == 0:
+                return 0.0
+
+            # Giới hạn dữ liệu phân tích để tránh treo UI khi bài quá dài.
+            max_samples = int(self.sample_rate * self.max_detect_seconds)
+            if max_samples > 0 and mono.shape[0] > max_samples:
+                mono = mono[:max_samples]
+
+            # Resample xuống 22050Hz để tăng tốc phân tích.
+            analysis_sr = 22050
+            if self.sample_rate != analysis_sr:
+                mono = self._resample_safe(mono, self.sample_rate, analysis_sr)
+            else:
+                analysis_sr = self.sample_rate
+
+            # Ước lượng tempo từ onset envelope (nhanh, ổn định hơn cho realtime UI).
+            onset_env = librosa.onset.onset_strength(y=mono, sr=analysis_sr)
+            tempo = librosa.feature.tempo(
+                onset_envelope=onset_env,
+                sr=analysis_sr,
+                aggregate=np.median,
+            )
+            bpm = float(tempo[0]) if np.size(tempo) else 0.0
+            self.bpm = bpm if np.isfinite(bpm) else 0.0
             return self.bpm
         except Exception as exc:  # noqa: BLE001
             print(f"[BPMDetector] detect_bpm lỗi: {exc}")
             return 0.0
 
     def detect_bpm_from_file(self, file_path: str) -> float:
-        """Phát hiện BPM trực tiếp từ file (WAV/FLAC)."""
+        """Phát hiện BPM trực tiếp từ file (WAV/FLAC), chỉ đọc một phần đầu file."""
         if not LIBROSA_AVAILABLE or not SF_AVAILABLE:
             return 0.0
         try:
-            data, sr = sf.read(file_path, always_2d=True)
-            self.sample_rate = sr
+            with sf.SoundFile(file_path) as audio_file:
+                self.sample_rate = audio_file.samplerate
+                max_frames = int(self.sample_rate * self.max_detect_seconds)
+                frames_to_read = min(len(audio_file), max_frames)
+                data = audio_file.read(
+                    frames=frames_to_read,
+                    dtype="float32",
+                    always_2d=True,
+                )
             return self.detect_bpm(data)
         except Exception as exc:  # noqa: BLE001
             print(f"[BPMDetector] detect_bpm_from_file lỗi: {exc}")

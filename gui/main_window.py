@@ -57,6 +57,8 @@ class MainWindow(QMainWindow):
         # Từ đây mỗi chunk audio sẽ đi qua effects_chain.process()
         self.engine_a.set_effects_chain(self.effects_a)
         self.engine_b.set_effects_chain(self.effects_b)
+        self.engine_a.output_tap = self._on_engine_output
+        self.engine_b.output_tap = self._on_engine_output
 
         self._setup_window()
         self._apply_global_style()
@@ -292,9 +294,17 @@ class MainWindow(QMainWindow):
             self.btn_record.setText("⏺ REC")
             self.lbl_rec_time.setText("")
             if saved:
-                self.lbl_status.setText(f"✅ Đã lưu: {os.path.basename(saved)}")
+                if self.recorder.get_chunks_written() > 0:
+                    self.lbl_status.setText(f"✅ Đã lưu: {os.path.basename(saved)}")
+                else:
+                    self.lbl_status.setText("⚠ File ghi âm rỗng (không có audio đầu vào)")
             else:
                 self.lbl_status.setText("Sẵn sàng")
+
+    def _on_engine_output(self, deck_id: str, chunk):
+        """Nhận audio output từ từng deck và gửi sang recorder để ghi master mix."""
+        if self.recorder.is_recording:
+            self.recorder.write_deck_chunk(deck_id, chunk)
 
     # ── Update status ─────────────────────────────────────────────────────────
 

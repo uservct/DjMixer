@@ -14,6 +14,8 @@ Hiển thị:
 """
 
 import os
+import threading
+from queue import Queue, Empty
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QSlider, QFileDialog, QFrame, QSizePolicy
@@ -45,6 +47,8 @@ class DeckWidget(QWidget):
         self.colors = self.DECK_COLORS.get(deck_id, self.DECK_COLORS["A"])
 
         self._seeking = False  # Đang kéo seek slider không?
+        self._bpm_task_id = 0
+        self._bpm_queue: Queue = Queue()
 
         self._build_ui()
         self._connect_signals()
@@ -278,20 +282,61 @@ class DeckWidget(QWidget):
             self.lbl_track.setText(name)
             self.waveform.set_waveform(self.engine.waveform, self.engine.duration)
             self.seek_slider.setValue(0)
-            self.lbl_bpm.setText("BPM: đang tính...")
-            # Detect BPM trong background thread, cập nhật UI trên main thread
-            import threading
-            def _detect():
-                if len(self.engine.waveform) > 0:
-                    bpm = self.bpm_detector.detect_bpm(self.engine.waveform)
-                    text = f"BPM: {bpm:.1f}" if bpm > 0 else "BPM: —"
-                else:
-                    text = "BPM: —"
-                # Phải update label trên main thread
-                QTimer.singleShot(0, lambda: self.lbl_bpm.setText(text))
-            threading.Thread(target=_detect, daemon=True).start()
+            self._start_bpm_detection(path)
         else:
             self.lbl_track.setText("❌ Lỗi load file! (Thử dùng WAV/OGG)")
+
+    def _start_bpm_detection(self, path: str):
+        self._bpm_task_id += 1
+        task_id = self._bpm_task_id
+        self.lbl_bpm.setText("BPM: đang tính...")
+
+        thread = threading.Thread(
+            target=self._run_bpm_detection,
+            args=(task_id, path),
+            daemon=True,
+        )
+        thread.start()
+
+        # Poll kết quả trong main thread (tránh update UI từ thread nền)
+        QTimer.singleShot(100, lambda: self._poll_bpm_result(task_id, elapsed_ms=0))
+
+    def _run_bpm_detection(self, task_id: int, path: str):
+        try:
+            bpm = self.bpm_detector.detect_bpm_from_file(path)
+            # Fallback nếu detect từ file thất bại
+            if bpm <= 0 and len(self.engine.waveform) > 0:
+                bpm = self.bpm_detector.detect_bpm(self.engine.waveform)
+            self._bpm_queue.put((task_id, float(bpm), None))
+        except Exception as exc:  # noqa: BLE001
+            self._bpm_queue.put((task_id, 0.0, str(exc)))
+
+    def _poll_bpm_result(self, task_id: int, elapsed_ms: int):
+        # Timeout mềm để tránh kẹt vĩnh viễn ở "đang tính..."
+        if elapsed_ms >= 12000:
+            if task_id == self._bpm_task_id:
+                self.lbl_bpm.setText("BPM: —")
+            return
+
+        try:
+            while True:
+                result_task_id, bpm, err = self._bpm_queue.get_nowait()
+
+                # Bỏ kết quả cũ (task đã bị thay thế do user load track mới)
+                if result_task_id != self._bpm_task_id:
+                    continue
+
+                if err:
+                    print(f"[Deck {self.deck_id}] BPM error: {err}")
+                    self.lbl_bpm.setText("BPM: —")
+                else:
+                    self.lbl_bpm.setText(f"BPM: {bpm:.1f}" if bpm > 0 else "BPM: —")
+                return
+        except Empty:
+            QTimer.singleShot(
+                100,
+                lambda: self._poll_bpm_result(task_id, elapsed_ms + 100),
+            )
 
     def _on_play_pause(self):
         if not self.engine.is_loaded():

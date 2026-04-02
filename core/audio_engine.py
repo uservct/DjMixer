@@ -71,6 +71,9 @@ class AudioEngine:
         # Effects chain (được gán từ bên ngoài qua set_effects_chain)
         self.effects_chain = None
 
+        # Tap callback nhận chunk output sau khi xử lý (deck_id, chunk)
+        self.output_tap = None
+
         # Callback khi track kết thúc tự nhiên
         self.on_track_end = None
 
@@ -293,6 +296,13 @@ class AudioEngine:
         # ── Clip và output ──
         np.clip(chunk, -1.0, 1.0, out=chunk)
         outdata[:] = chunk
+
+        # ── Tap output cho recorder / monitor ──
+        if self.output_tap is not None:
+            try:
+                self.output_tap(self.deck_id, chunk)
+            except Exception:
+                pass
 
     def _on_stream_finished(self):
         """Callback khi stream kết thúc (gọi bởi sounddevice)."""
